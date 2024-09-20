@@ -1,5 +1,6 @@
 import asyncio
 import contextvars  # noqa
+import copy
 import inspect
 import logging
 import typing
@@ -7,7 +8,7 @@ from collections import ChainMap, defaultdict
 from collections.abc import Coroutine
 from contextlib import AsyncExitStack, AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from types import FunctionType
-from typing import List, Union, Any, Callable, Type, Optional, Dict, Sequence
+from typing import List, Union, Any, Callable, Type, Optional, Dict, Sequence, Tuple
 
 import pydantic
 from fastapi.dependencies.utils import _should_embed_body_fields  # noqa
@@ -16,7 +17,7 @@ from fastapi.openapi.constants import REF_PREFIX
 try:
     from typing import Literal
 except ImportError:
-    from typing_extensions import Literal
+    from typing_extensions import Literal  # type: ignore
 
 from fastapi._compat import ModelField, Undefined  # noqa
 from fastapi.dependencies.models import Dependant
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 try:
     from functools import cached_property
 except ImportError:
-    class cached_property:  # noqa
+    class cached_property: # type: ignore # noqa
         def __init__(self, func):
             self.__doc__ = getattr(func, "__doc__")
             self.func = func
@@ -56,14 +57,14 @@ try:
     import sentry_sdk
     from sentry_sdk.utils import transaction_from_function as sentry_transaction_from_function
 except ImportError:
-    sentry_sdk = None
-    sentry_transaction_from_function = None
+    sentry_sdk = None  # type: ignore
+    sentry_transaction_from_function = None  # type: ignore
 
 
 try:
     from fastapi._compat import _normalize_errors  # noqa
 except ImportError:
-    def _normalize_errors(errors: Sequence[Any]) -> List[Dict[str, Any]]:
+    def _normalize_errors(errors: Sequence[Any]) -> Sequence[Any]:  # type: ignore
         return errors
 
 
@@ -73,17 +74,17 @@ class Params(fastapi.params.Body):
         default: Any,
         *,
         media_type: str = 'application/json',
-        title: str = None,
-        description: str = None,
-        gt: float = None,
-        ge: float = None,
-        lt: float = None,
-        le: float = None,
-        min_length: int = None,
-        max_length: int = None,
-        regex: str = None,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        gt: Optional[float] = None,
+        ge: Optional[float] = None,
+        lt: Optional[float] = None,
+        le: Optional[float] = None,
+        min_length: Optional[int] = None,
+        max_length: Optional[int] = None,
+        regex: Optional[str] = None,
         example: Any = Undefined,
-        examples: Optional[Dict[str, Any]] = None,
+        examples: Optional[List[Any]] = None,
         **extra: Any,
     ):
         super().__init__(
@@ -106,14 +107,14 @@ class Params(fastapi.params.Body):
         )
 
 
-components = {}
+components: Dict[Tuple[str, str], Type[BaseModel]] = {}
 
 
-def component_name(name: str, module: str = None):
+def component_name(name: str, module: Optional[str] = None) -> Callable[[Type[BaseModel]], Type[BaseModel]]:
     """OpenAPI components must be unique by name"""
-    def decorator(obj):
+    def decorator(obj: Type[BaseModel]) -> type[BaseModel]:
         assert issubclass(obj, BaseModel)
-        opts = {
+        opts: dict[str, Any] = {
             '__base__': tuple(obj.mro()[1:]),  # remove self from __base__
             '__module__': module or obj.__module__,
             **{
@@ -146,7 +147,7 @@ def component_name(name: str, module: str = None):
     return decorator
 
 
-def is_scope_child(owner: type, child: type):
+def is_scope_child(owner: Type[BaseModel], child: Type[BaseModel]) -> bool:
     return (
         (
             owner.__dict__.get(child.__name__) is child or
@@ -164,20 +165,20 @@ def rename_if_scope_child_component(owner: type, child, postfix: str):
 
 
 class BaseError(Exception):
-    CODE = None
-    MESSAGE = None
+    CODE: Optional[int] = None
+    MESSAGE: Optional[str] = None
 
-    ErrorModel = None
-    DataModel = None
+    ErrorModel: Optional[Type[BaseModel]] = None
+    DataModel: Optional[Type[BaseModel]] = None
 
-    data_required = False
-    errors_required = False
+    data_required: bool = False
+    errors_required: bool = False
 
-    error_model = None
-    data_model = None
-    resp_model = None
+    error_model: Optional[Type[BaseModel]] = None
+    data_model: Optional[Type[BaseModel]] = None
+    resp_model: Optional[Type[BaseModel]] = None
 
-    _component_name = None
+    _component_name: Optional[str] = None
 
     def __init__(self, data=None):
         if data is None:
@@ -294,7 +295,7 @@ class BaseError(Exception):
         return cls.resp_model
 
     @classmethod
-    def build_resp_model(cls):
+    def build_resp_model(cls) -> Type[BaseModel]:
         fields_definition = {
             'code': (int, Field(cls.CODE, frozen=True, json_schema_extra={'example': cls.CODE})),
             'message': (str, Field(cls.MESSAGE, frozen=True, json_schema_extra={'example': cls.MESSAGE})),
@@ -382,8 +383,8 @@ async def call_sync_async(call, *args, **kwargs):
         return await run_in_threadpool(call, *args, **kwargs)
 
 
-def errors_responses(errors: Sequence[Type[BaseError]] = None):
-    responses = {'default': {}}
+def errors_responses(errors: Optional[Sequence[Type[BaseError]]] = None)->Dict[Any, Any]:
+    responses: Dict[Any, Any] = {'default': {}}
 
     if errors:
         # Swagger UI 5.0 and above allow use only int status_codes and in _valid range_
@@ -471,7 +472,7 @@ def clone_dependant(dependant: Dependant) -> Dependant:
     return new_dependant
 
 
-def insert_dependencies(target: Dependant, dependencies: Sequence[Depends] = None):
+def insert_dependencies(target: Dependant, dependencies: Optional[Sequence[Depends]] = None):
     assert target.path
     if not dependencies:
         return
@@ -482,7 +483,7 @@ def insert_dependencies(target: Dependant, dependencies: Sequence[Depends] = Non
         )
 
 
-def make_request_model(name, module, body_params: List[ModelField]):
+def make_request_model(name: str, module: str, body_params: List[ModelField]) -> Type[BaseModel]:
     whole_params_list = [p for p in body_params if isinstance(p.field_info, Params)]
     if len(whole_params_list):
         if len(whole_params_list) > 1:
@@ -531,12 +532,12 @@ def make_request_model(name, module, body_params: List[ModelField]):
     return _Request
 
 
-def make_response_model(name, module, result_model):
+def make_response_model(name: str, module: str, result_model: Type[BaseModel]) -> Type[BaseModel]:
     @component_name(f'_Response[{name}]', module)
     class _Response(BaseModel):
         jsonrpc: Literal['2.0'] = Field('2.0', json_schema_extra={'example': '2.0'})
         id: Union[StrictStr, int] = Field(None, json_schema_extra={'example': 0})
-        result: result_model
+        result: result_model  # type: ignore[valid-type]
 
         model_config = ConfigDict(extra='forbid', json_schema_serialization_defaults_required=True)
 
@@ -692,13 +693,13 @@ class MethodRoute(APIRoute):
         path: str,
         func: Union[FunctionType, Coroutine],
         *,
-        result_model: Type[Any] = None,
-        name: str = None,
-        errors: List[Type[BaseError]] = None,
-        dependencies: Sequence[Depends] = None,
+        result_model: Optional[Type[Any]] = None,
+        name: Optional[str] = None,
+        errors: Optional[List[Type[BaseError]]] = None,
+        dependencies: Optional[Sequence[Depends]] = None,
         response_class: Type[Response] = JSONResponse,
         request_class: Type[JsonRpcRequest] = JsonRpcRequest,
-        middlewares: Sequence[JsonRpcMiddleware] = None,
+        middlewares: Optional[Sequence[JsonRpcMiddleware]] = None,
         **kwargs,
     ):
         name = name or func.__name__
@@ -836,7 +837,7 @@ class MethodRoute(APIRoute):
         background_tasks: BackgroundTasks,
         sub_response: Response,
         req: Any,
-        dependency_cache: dict = None,
+        dependency_cache: Optional[dict] = None,
         shared_dependencies_error: BaseError = None
     ) -> dict:
         async with JsonRpcContext(
@@ -868,8 +869,8 @@ class MethodRoute(APIRoute):
         background_tasks: BackgroundTasks,
         sub_response: Response,
         ctx: JsonRpcContext,
-        dependency_cache: dict = None,
-        shared_dependencies_error: BaseError = None
+        dependency_cache: Optional[dict] = None,
+        shared_dependencies_error: Optional[BaseError] = None
     ):
         await ctx.enter_middlewares(self.middlewares)
 
@@ -879,7 +880,7 @@ class MethodRoute(APIRoute):
         # dependency_cache - there are shared dependencies, we pass them to each method, since
         # they are common to all methods in the batch.
         # But if the methods have their own dependencies, they are resolved separately.
-        dependency_cache = dependency_cache.copy()
+        dependency_cache = copy.copy(dependency_cache)
 
         solved_dependency = await solve_dependencies(
             request=http_request,
@@ -949,9 +950,9 @@ class EntrypointRoute(APIRoute):
         entrypoint: 'Entrypoint',
         path: str,
         *,
-        name: str = None,
-        errors: List[Type[BaseError]] = None,
-        common_dependencies: Sequence[Depends] = None,
+        name: Optional[str] = None,
+        errors: Optional[List[Type[BaseError]]] = None,
+        common_dependencies: Optional[Sequence[Depends]] = None,
         response_class: Type[Response] = JSONResponse,
         request_class: Type[JsonRpcRequest] = JsonRpcRequest,
         **kwargs,
@@ -1163,7 +1164,7 @@ class EntrypointRoute(APIRoute):
         background_tasks: BackgroundTasks,
         sub_response: Response,
         req: Any,
-        dependency_cache: dict = None,
+        dependency_cache: Optional[dict] = None,
         shared_dependencies_error: BaseError = None
     ) -> dict:
         async with JsonRpcContext(
@@ -1191,7 +1192,7 @@ class EntrypointRoute(APIRoute):
         background_tasks: BackgroundTasks,
         sub_response: Response,
         ctx: JsonRpcContext,
-        dependency_cache: dict = None,
+        dependency_cache: Optional[dict] = None,
         shared_dependencies_error: BaseError = None
     ):
         http_request_shadow = RequestShadow(http_request)
@@ -1223,13 +1224,13 @@ class Entrypoint(APIRouter):
         self,
         path: str,
         *,
-        name: str = None,
-        errors: List[Type[BaseError]] = None,
-        dependencies: Sequence[Depends] = None,
-        common_dependencies: Sequence[Depends] = None,
-        middlewares: Sequence[JsonRpcMiddleware] = None,
+        name: Optional[str] = None,
+        errors: Optional[List[Type[BaseError]]] = None,
+        dependencies: Optional[Sequence[Depends]] = None,
+        common_dependencies: Optional[Sequence[Depends]] = None,
+        middlewares: Optional[Sequence[JsonRpcMiddleware]] = None,
         scheduler_factory: Callable[..., aiojobs.Scheduler] = aiojobs.Scheduler,
-        scheduler_kwargs: dict = None,
+        scheduler_kwargs: Optional[dict] = None,
         request_class: Type[JsonRpcRequest] = JsonRpcRequest,
         **kwargs,
     ) -> None:
@@ -1316,7 +1317,7 @@ class Entrypoint(APIRouter):
         self,
         func: Union[FunctionType, Coroutine],
         *,
-        name: str = None,
+        name: Optional[str] = None,
         **kwargs,
     ) -> None:
         name = name or func.__name__
